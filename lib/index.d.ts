@@ -36,7 +36,13 @@ export interface Config {
         enabled: boolean;
         baseURL: string;
         apiKeyEnv: string;
+        /** Default model id (kept for single-model configs). */
         model: string;
+        /** Ordered model list; the first entry is the default. Empty falls back to `model`. */
+        models: Array<{
+            id: string;
+            name?: string;
+        }>;
         defaultSize: string;
         watermark: boolean;
     };

@@ -14,6 +14,11 @@ export interface ImageGenSettings {
     apiKeyEnv: string;
     /** Seedream model id, e.g. doubao-seedream-5-0-260128. */
     model: string;
+    /** Ordered Seedream model list; the first entry is the default. Empty falls back to `model`. */
+    models: Array<{
+        id: string;
+        name?: string;
+    }>;
     /** Default output size: '2k' | '3k' | '4k' (Seedream presets). */
     defaultSize: string;
     /** Show the "AI生成" watermark (default false). */

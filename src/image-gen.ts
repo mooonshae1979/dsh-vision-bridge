@@ -23,6 +23,8 @@ export interface ImageGenSettings {
   apiKeyEnv: string
   /** Seedream model id, e.g. doubao-seedream-5-0-260128. */
   model: string
+  /** Ordered Seedream model list; the first entry is the default. Empty falls back to `model`. */
+  models: Array<{ id: string; name?: string }>
   /** Default output size: '2k' | '3k' | '4k' (Seedream presets). */
   defaultSize: string
   /** Show the "AI生成" watermark (default false). */
@@ -30,6 +32,28 @@ export interface ImageGenSettings {
 }
 
 const SIZES = new Set(['2k', '3k', '4k'])
+
+/**
+ * Resolve which Seedream model to use for one request.
+ * Priority: an explicit `model` argument (matched against the configured
+ * `models` list by id or short name, else used verbatim) → the first entry of
+ * the configured `models` list → the configured `model` fallback.
+ */
+function resolveModel(
+  requested: string | undefined,
+  settings: ImageGenSettings,
+): { id: string; label: string } {
+  const list = settings.models.length > 0 ? settings.models : [{ id: settings.model }]
+  if (requested !== undefined && requested.trim().length > 0) {
+    const want = requested.trim()
+    const hit = list.find((m) => m.id === want || m.name === want)
+    if (hit !== undefined) return { id: hit.id, label: hit.name ?? hit.id }
+    // Unknown explicit request: use it verbatim (the backend will validate).
+    return { id: want, label: want }
+  }
+  const first = list[0]
+  return { id: first.id, label: first.name ?? first.id }
+}
 
 function validateSize(size: string): string {
   const s = size.trim().toLowerCase()
@@ -121,6 +145,12 @@ export function registerImageGenTool(
         type: 'number',
         description: 'Number of images to generate (1..4, default 1; billed per image).',
       },
+      model: {
+        type: 'string',
+        description:
+          'Optional Seedream model to use: "5.0" (default), "4.5", "4.0", or a full model id. ' +
+          'Omit to use the configured default (the model with the most remaining quota).',
+      },
     },
     output: {
       schema: {
@@ -185,6 +215,7 @@ export function registerImageGenTool(
       const current = settings()
       const size = args.size === undefined ? current.defaultSize : validateSize(args.size)
       const n = Math.min(4, Math.max(1, Math.floor(args.n ?? 1)))
+      const { id: modelId, label: modelLabel } = resolveModel(args.model, current)
       const apiKey = await resolveKey(current.apiKeyEnv)
       const attachments = ctx.get('attachments')
       if (attachments === undefined) throw new Error('generate_image: no attachment service is mounted')
@@ -200,7 +231,7 @@ export function registerImageGenTool(
             'content-type': 'application/json',
           },
           body: JSON.stringify({
-            model: current.model,
+            model: modelId,
             prompt: args.prompt,
             size,
             n,
@@ -265,7 +296,7 @@ export function registerImageGenTool(
 
       const value = {
         prompt: args.prompt,
-        model: current.model,
+        model: modelLabel,
         images,
         ...(failures.length > 0 ? { failures } : {}),
       }

@@ -43,7 +43,10 @@ export interface Config {
     enabled: boolean
     baseURL: string
     apiKeyEnv: string
+    /** Default model id (kept for single-model configs). */
     model: string
+    /** Ordered model list; the first entry is the default. Empty falls back to `model`. */
+    models: Array<{ id: string; name?: string }>
     defaultSize: string
     watermark: boolean
   }
@@ -93,6 +96,14 @@ export const Config: z<Config> = z.object({
     baseURL: z.string().default('https://ark.cn-beijing.volces.com/api/v3'),
     apiKeyEnv: z.string().default('ARK_API_KEY'),
     model: z.string().default('doubao-seedream-5-0-260128'),
+    models: z
+      .array(
+        z.object({
+          id: z.string(),
+          name: z.string().required(false),
+        }),
+      )
+      .default([]),
     defaultSize: z.string().default('2k'),
     watermark: z.boolean().default(false),
   }),
@@ -163,6 +174,7 @@ export function apply(ctx: Context, config: Config): void {
         baseURL: img.baseURL,
         apiKeyEnv: img.apiKeyEnv,
         model: img.model,
+        models: img.models,
         defaultSize: img.defaultSize,
         watermark: img.watermark,
       }
