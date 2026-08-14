@@ -17,8 +17,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
+import { LlmError } from '@deepseek-ai/dsh-llm'
 import { autoApplyHostPatch, type HostPatchConfig } from './host-patch.js'
 import { DEFAULT_TRANSCRIBE_PROMPT, installVision } from './vision.js'
+import { registerImageGenTool, type ImageGenSettings } from './image-gen.js'
 import type { ModelSelectionConfig } from './models.js'
 
 export const name = 'dsh-vision-bridge'
@@ -36,6 +38,14 @@ export interface Config {
     includeAttachmentInfo: boolean
     includeUserText: boolean
     modelSelection: ModelSelectionConfig
+  }
+  image: {
+    enabled: boolean
+    baseURL: string
+    apiKeyEnv: string
+    model: string
+    defaultSize: string
+    watermark: boolean
   }
 }
 
@@ -77,6 +87,14 @@ export const Config: z<Config> = z.object({
       candidates: [],
       manual: { provider: '', model: '' },
     }),
+  }),
+  image: z.object({
+    enabled: z.boolean().default(true),
+    baseURL: z.string().default('https://ark.cn-beijing.volces.com/api/v3'),
+    apiKeyEnv: z.string().default('ARK_API_KEY'),
+    model: z.string().default('doubao-seedream-5-0-260128'),
+    defaultSize: z.string().default('2k'),
+    watermark: z.boolean().default(false),
   }),
 }) as unknown as z<Config>
 
@@ -121,4 +139,34 @@ export function apply(ctx: Context, config: Config): void {
       includeUserText: v.includeUserText,
     }
   })
+
+  // The hand: text-to-image via Volcengine Ark (Doubao Seedream).
+  const resolveKey = async (ref: string): Promise<string> => {
+    const credentials = ctx.get('credentials')
+    if (credentials !== undefined) {
+      const hit = await credentials.resolve(ref)
+      if (hit !== undefined && hit.value.length > 0) return hit.value
+    } else {
+      const ambient = process.env[ref]
+      if (ambient !== undefined && ambient.length > 0) return ambient
+    }
+    throw new LlmError(
+      `dsh-vision-bridge: no API key for image generation; store ${ref} through the credentials service, or export ${ref} in the launching environment`,
+      'MISSING_CREDENTIAL',
+    )
+  }
+
+  if (options().image.enabled) {
+    registerImageGenTool(ctx, () => {
+      const img = options().image
+      const s: ImageGenSettings = {
+        baseURL: img.baseURL,
+        apiKeyEnv: img.apiKeyEnv,
+        model: img.model,
+        defaultSize: img.defaultSize,
+        watermark: img.watermark,
+      }
+      return s
+    }, resolveKey)
+  }
 }

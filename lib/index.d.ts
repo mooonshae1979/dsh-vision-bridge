@@ -32,6 +32,14 @@ export interface Config {
         includeUserText: boolean;
         modelSelection: ModelSelectionConfig;
     };
+    image: {
+        enabled: boolean;
+        baseURL: string;
+        apiKeyEnv: string;
+        model: string;
+        defaultSize: string;
+        watermark: boolean;
+    };
 }
 export declare const Config: z<Config>;
 export declare function apply(ctx: Context, config: Config): void;

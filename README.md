@@ -5,6 +5,7 @@
 ## 特性
 
 - **Host 图片准入自动补丁（自愈）**：每次插件加载自动检查 `dsh-host-apiproxy` 的两处图片准入检查，未打补丁则自动应用（`RELAX_IMAGE_ADMISSION` 开关，默认放行），备份原文件；`npm update -g @deepseek-ai/dsh` 后无需手动重打。
+- **文生图（generate_image）**：通过火山引擎方舟 Doubao Seedream 生成图片，下载后注入会话显示。
 - **读图子 agent**：`agent/pre-step` 检测到图片且当前模型不原生看图时，基于 `ctx.subagents`（与 AgentTeams 成员同源）生成一次性子 agent，`agentOptions` 固定视觉路由、禁用全部工具、超时取消、完成后释放。
 - **失败自动重试**：视觉路由按「免费优先、质量优先」排序成候选列表；一次尝试失败（spawn 错误 / 子 agent 未完成 / 空输出）自动换下一个候选路由，最多 `maxAttempts` 次；全部失败后再降级为直连 `llm.stream` 重试一次（`fallbackToDirect`）。
 - **带着需求读图**：视觉子 agent 不再只拿到图片——**图片所在消息里的用户文本（问题/指令）会一并传给视觉模型**（`includeUserText`，默认开启），所以问"这是谁"时视觉模型会做身份识别，而不是机械逐字转写。
