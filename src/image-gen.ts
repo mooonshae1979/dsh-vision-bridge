@@ -2,19 +2,16 @@
  * `generate_image` — text-to-image via Volcengine Ark (Doubao Seedream).
  *
  * POST /api/v3/images/generations (synchronous), downloads the result bytes
- * into the durable attachment store, and injects the image into the session
- * so the user sees it in the conversation (and the main model can reference
- * it on the next turn).
+ * into the durable attachment store, and (when a session cwd is known) copies
+ * the bytes into the working directory so the user can open the image. The
+ * tool result is deliberately text-only: on a text-only main-model route
+ * (e.g. DeepSeek-V4-Flash-Official) image blocks in the model-facing result
+ * would fail the step, so the picture is never injected into model context.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import {
-  createUserMessage,
-  LlmError,
-  type ContentBlock,
-  type UserMessage,
-} from '@deepseek-ai/dsh-llm'
+import { LlmError, type ContentBlock } from '@deepseek-ai/dsh-llm'
 
 export interface ImageGenSettings {
   /** Volcengine Ark base URL, e.g. https://ark.cn-beijing.volces.com/api/v3 */
@@ -113,6 +110,13 @@ function mediaTypeFor(url: string, contentType: string | null): 'image/png' | 'i
   return 'image/jpeg'
 }
 
+/** File extension for a stored image media type (used when copying to cwd). */
+function mediaTypeToExt(mediaType: string): string {
+  if (mediaType.includes('png')) return '.png'
+  if (mediaType.includes('webp')) return '.webp'
+  return '.jpg'
+}
+
 async function downloadImage(url: string, signal: AbortSignal): Promise<{ data: Uint8Array; mediaType: 'image/png' | 'image/jpeg' | 'image/webp' }> {
   const response = await fetch(url, { signal })
   if (!response.ok) throw new Error(`failed to download generated image (HTTP ${response.status})`)
@@ -130,7 +134,9 @@ export function registerImageGenTool(
     name: 'generate_image',
     description:
       'Generate an image from a text prompt using the Volcengine Doubao Seedream text-to-image model. ' +
-      'Returns the generated image(s) into the conversation. The prompt should be a detailed visual description.',
+      'The image is saved to the durable attachment store and copied into the session working directory ' +
+      '(when one is known) so the user can open the file; the result text carries the attachment references. ' +
+      'The prompt should be a detailed visual description.',
     parameters: {
       prompt: {
         type: 'string',
@@ -186,27 +192,29 @@ export function registerImageGenTool(
         },
       },
       render: (_args, value) => {
-        const blocks: ContentBlock[] = [
-          {
-            type: 'text',
-            text:
-              value.images.length > 0
-                ? `已生成 ${value.images.length} 张图片(模型 ${value.model})。\n图片描述: ${value.prompt}`
-                : `图片生成失败: 未返回任何图片(模型 ${value.model})`,
-          },
-          ...value.images.map((image: ImageGenImageValue): ContentBlock => {
-            const ref: ImageAttachmentRef = {
-              attachmentId: image.attachmentId as ImageAttachmentRef['attachmentId'],
-              mediaType: image.mediaType,
-              bytes: image.bytes,
-              width: image.width,
-              height: image.height,
-              ...(image.name !== undefined ? { name: image.name } : {}),
-            }
-            return { type: 'image', attachment: ref }
-          }),
-        ]
-        return blocks
+        // NOTE: deliberately text-only. The main model may be a text-only route
+        // (e.g. DeepSeek-V4-Flash-Official) that cannot accept image blocks in
+        // its request; returning image blocks here would put them into the
+        // model-facing tool result and fail the step. The image bytes are saved
+        // to the durable attachment store (and copied to the session cwd when
+        // possible) so the user can still view them; the text carries the
+        // attachment references for any later tool to re-read.
+        const lines: string[] = []
+        if (value.images.length > 0) {
+          lines.push(`已生成 ${value.images.length} 张图片(模型 ${value.model})。`)
+          lines.push(`图片描述: ${value.prompt}`)
+          value.images.forEach((image: ImageGenImageValue, index: number) => {
+            const size = image.width > 0 && image.height > 0 ? `${image.width}x${image.height}` : ''
+            const bytes = image.bytes >= 1024 ? `${Math.round(image.bytes / 102.4) / 10}KB` : `${image.bytes}B`
+            lines.push(
+              `图${index + 1}: attachmentId=${image.attachmentId}${size ? `, ${size}` : ''}, ${bytes}, ${image.mediaType}` +
+                (image.name !== undefined && image.name.length > 0 ? `, name=${image.name}` : ''),
+            )
+          })
+        } else {
+          lines.push(`图片生成失败: 未返回任何图片(模型 ${value.model})`)
+        }
+        return [{ type: 'text', text: lines.join('\n') }]
       },
     },
     isConcurrencySafe: () => true,
@@ -301,12 +309,22 @@ export function registerImageGenTool(
         ...(failures.length > 0 ? { failures } : {}),
       }
 
-      // Make the generated image visible in the conversation (user side).
-      if (images.length > 0) {
-        const message = createUserMessage({
-          content: [
-            { type: 'text', text: `【生图完成】${images.length} 张图片已生成: ${args.prompt}` },
-            ...images.map((image) => {
+      // Make the generated image visible to the user WITHOUT putting image
+      // blocks into the model-facing context. Injecting an image message would
+      // queue it for the next pre-step, and on a text-only route (e.g.
+      // DeepSeek-V4-Flash-Official) the image block would reach the model and
+      // fail the step. Instead we copy the bytes into the session working
+      // directory (when one is known) so the user can open the file directly;
+      // the tool-result text already carries the attachment references.
+      if (images.length > 0 && exec.agent !== undefined) {
+        const cwd = exec.agent.session?.header?.cwd
+        if (cwd !== undefined && cwd.length > 0) {
+          const fs = await import('node:fs')
+          const path = await import('node:path')
+          const ext = mediaTypeToExt(images[0].mediaType)
+          for (let i = 0; i < images.length; i++) {
+            const image = images[i]
+            try {
               const ref: ImageAttachmentRef = {
                 attachmentId: image.attachmentId as ImageAttachmentRef['attachmentId'],
                 mediaType: image.mediaType,
@@ -314,16 +332,17 @@ export function registerImageGenTool(
                 width: image.width,
                 height: image.height,
               }
-              return { type: 'image', attachment: ref } satisfies ContentBlock
-            }),
-          ],
-          source: { kind: 'plugin', plugin: 'dsh-vision-bridge' },
-        })
-        try {
-          exec.agent?.inject(message)
-        } catch (error) {
-          // Agent may be disposed; the tool value still carries the references.
-          ctx.logger.warn(`generate_image: inject failed: ${String(error)}`)
+              const stored = await attachments.readImage(ref, exec.signal)
+              const fileName = `generated_image_${taskId}_${i + 1}${ext}`
+              const target = path.join(cwd, fileName)
+              fs.writeFileSync(target, stored.data)
+              ctx.logger.info(`generate_image: saved ${target} (${stored.data.byteLength} bytes)`)
+            } catch (error) {
+              // Copying to cwd is best-effort; the attachment store is the
+              // durable home and the tool result still references it.
+              ctx.logger.warn(`generate_image: failed to copy image ${i + 1} to cwd: ${String(error)}`)
+            }
+          }
         }
       }
 

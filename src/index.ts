@@ -24,7 +24,7 @@ import { registerImageGenTool, type ImageGenSettings } from './image-gen.js'
 import type { ModelSelectionConfig } from './models.js'
 
 export const name = 'dsh-vision-bridge'
-export const inject = ['llm', 'subagents']
+export const inject = ['llm', 'subagents', 'tools']
 
 export const NS = settingsNamespace('dsh-vision-bridge')
 

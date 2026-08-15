@@ -2,9 +2,11 @@
  * `generate_image` — text-to-image via Volcengine Ark (Doubao Seedream).
  *
  * POST /api/v3/images/generations (synchronous), downloads the result bytes
- * into the durable attachment store, and injects the image into the session
- * so the user sees it in the conversation (and the main model can reference
- * it on the next turn).
+ * into the durable attachment store, and (when a session cwd is known) copies
+ * the bytes into the working directory so the user can open the image. The
+ * tool result is deliberately text-only: on a text-only main-model route
+ * (e.g. DeepSeek-V4-Flash-Official) image blocks in the model-facing result
+ * would fail the step, so the picture is never injected into model context.
  */
 import type { Context } from '@deepseek-ai/cordis';
 export interface ImageGenSettings {
